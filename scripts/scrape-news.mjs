@@ -96,6 +96,8 @@ function extractJsonLdDate($) {
   return { published: null, modified: null };
 }
 
+const NOISE_SELECTORS = "header, footer, nav, aside, form, script, style, .menu, .navigation, .sidebar, .widget, .breadcrumb, .wp-block-navigation";
+
 function pickContentContainer($article) {
   const candidates = [
     $article("article .entry-content").first(),
@@ -105,25 +107,26 @@ function pickContentContainer($article) {
 
   for (const candidate of candidates) {
     if (candidate.length > 0) {
+      candidate.find(NOISE_SELECTORS).remove();
       return candidate;
     }
   }
 
-  return $article("body").first();
+  return null;
 }
 
 function htmlToMarkdown($container) {
+  if (!$container) return "";
   const lines = [];
 
-  $container.find("h1, h2, h3, p, li, blockquote").each((_, el) => {
+  $container.find("h1, h2, h3, h4, p, blockquote").each((_, el) => {
     const tag = el.tagName.toLowerCase();
     const text = cheerio.load(el).text().trim();
     if (!text) return;
 
     if (tag === "h1") lines.push(`# ${text}`);
     else if (tag === "h2") lines.push(`## ${text}`);
-    else if (tag === "h3") lines.push(`### ${text}`);
-    else if (tag === "li") lines.push(`- ${text}`);
+    else if (tag === "h3" || tag === "h4") lines.push(`### ${text}`);
     else if (tag === "blockquote") lines.push(`> ${text}`);
     else lines.push(text);
   });
@@ -287,11 +290,13 @@ async function scrape() {
         const contentMarkdown = htmlToMarkdown(contentContainer);
 
         const gallery = [];
-        contentContainer.find("img").each((_, img) => {
+        (contentContainer ?? $article("body")).find("img").each((_, img) => {
           if (gallery.length >= 8) return;
           const $img = $article(img);
           const url = normalizeImageSource($img, seed.href);
           if (!url) return;
+          if (/\/res\/flags\//.test(url)) return;
+          if (/-\d+x\d+\.\w+$/.test(url)) return;
           gallery.push({
             url,
             alt: ($img.attr("alt") || seed.title || "Article image").trim(),
