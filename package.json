@@ -1,0 +1,22 @@
+{
+  "name": "whisperpower-news-content",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "scrape": "node scripts/scrape-news.mjs",
+    "validate": "node scripts/validate-news.mjs",
+    "format": "prettier --write data/news.json",
+    "build:content": "yarn scrape && yarn validate && yarn format",
+    "ci": "yarn build:content"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  }
+}
