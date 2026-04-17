@@ -1,0 +1,42 @@
+name: Scrape WhisperPower News
+
+on:
+    workflow_dispatch:
+    schedule:
+        - cron: "30 12 * * 1"
+
+permissions:
+    contents: write
+
+jobs:
+    scrape-news:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: yarn
+
+            - name: Install dependencies
+              run: yarn install --frozen-lockfile
+
+            - name: Scrape latest articles
+              run: yarn news:scrape
+
+            - name: Commit updated news
+              run: |
+                  if git diff --quiet -- data/news.json; then
+                    echo "No news changes"
+                    exit 0
+                  fi
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add data/news.json
+                  git commit -m "chore(news): refresh scraped whisperpower articles"
+                  git push
