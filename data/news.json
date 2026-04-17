@@ -1,11 +1,57 @@
 {
   "articles": [
     {
-      "id": "1",
-      "title": "New Feature Released",
-      "body": "...",
-      "publishedAt": "2026-04-17",
-      "imageUrl": "..."
+      "id": "news-2026-04-gridwatch-2-1",
+      "slug": "gridwatch-2-1-live-alerts",
+      "title": "GridWatch 2.1 Is Live",
+      "subtitle": "Faster alerts, better diagnostics, clearer event timelines",
+      "excerpt": "GridWatch 2.1 improves alert latency, adds richer diagnostics snapshots, and makes event timelines easier to scan.",
+      "publishedAt": "2026-04-17T09:30:00.000Z",
+      "updatedAt": "2026-04-17T11:00:00.000Z",
+      "category": "Product Update",
+      "tags": ["release", "alerts", "diagnostics"],
+      "bannerImage": {
+        "url": "https://images.unsplash.com/photo-1581092580497-e0d23cbdf1dc?auto=format&fit=crop&w=1600&q=80",
+        "alt": "Engineer reviewing power system metrics on tablet",
+        "credit": "Unsplash"
+      },
+      "gallery": [
+        {
+          "url": "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1400&q=80",
+          "alt": "Circuit board close-up",
+          "caption": "New diagnostics parser handles noisy edge states better"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1400&q=80",
+          "alt": "Server racks with status lights",
+          "caption": "Improved event indexing for large deployments"
+        }
+      ],
+      "contentMarkdown": "## What changed\n\nWe focused this release on three areas:\n\n- Alert latency and reliability\n- Diagnostics quality in degraded states\n- Better readability of long event histories\n\n## Why this matters\n\nFaster and more reliable insights reduce downtime.\n\n> If your team manages multiple systems, this update should significantly reduce triage time.\n\n## Upgrade notes\n\n1. Update your mobile app to the latest build\n2. Verify edge updater connectivity\n3. Trigger a quick diagnostics capture to confirm health\n\n## Known limitations\n\n- Some older edge images may still report sparse diagnostics fields\n- Legacy event categories are auto-mapped, but labels may differ\n\n## Next\n\nWe are working on in-app incident timelines and scheduled reports.",
+      "cta": {
+        "label": "Read Changelog",
+        "url": "https://github.com/HendrikdeJong/Eindstage-meta"
+      }
+    },
+    {
+      "id": "news-2026-04-maintenance-window",
+      "slug": "scheduled-maintenance-window-april",
+      "title": "Scheduled Cloud Maintenance",
+      "subtitle": "Short read-only window for analytics synchronization",
+      "excerpt": "A short maintenance window is planned this weekend. Local monitoring is unaffected.",
+      "publishedAt": "2026-04-14T07:00:00.000Z",
+      "updatedAt": "2026-04-14T07:00:00.000Z",
+      "category": "Operations",
+      "tags": ["maintenance", "cloud"],
+      "bannerImage": {
+        "url": "https://images.unsplash.com/photo-1461749280684-dccba630e2f6?auto=format&fit=crop&w=1600&q=80",
+        "alt": "Developer terminal during maintenance task",
+        "credit": "Unsplash"
+      },
+      "gallery": [],
+      "contentMarkdown": "## Maintenance window\n\nWe plan a short maintenance period on **Saturday 02:00-02:20 UTC**.\n\n### Impact\n\n- Cloud analytics may be delayed\n- Local system monitoring remains available\n- No firmware operations are planned during this window\n\n### Recommendation\n\nIf you are running critical operations, avoid cloud-triggered update jobs during this period."
     }
   ]
 }
+
+
