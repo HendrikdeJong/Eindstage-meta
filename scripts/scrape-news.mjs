@@ -297,6 +297,7 @@ async function scrape() {
           if (!url) return;
           if (/\/res\/flags\//.test(url)) return;
           if (/-\d+x\d+\.\w+$/.test(url)) return;
+          if (/\/themes\//.test(url)) return;
           gallery.push({
             url,
             alt: ($img.attr("alt") || seed.title || "Article image").trim(),
