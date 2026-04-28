@@ -13,12 +13,11 @@ const AJAX_URL =
 const AJAX_ACTION = process.env.SCRAPE_NEWS_AJAX_ACTION ?? "loadpost";
 const AJAX_SECURITY = process.env.SCRAPE_NEWS_AJAX_SECURITY ?? "88bdf301a6";
 const PAGE_SIZE = Number(process.env.SCRAPE_NEWS_PAGE_SIZE ?? "15");
-const MAX_PAGES = Number(process.env.SCRAPE_NEWS_MAX_PAGES ?? "8");
 const AJAX_CATEGORY = process.env.SCRAPE_NEWS_AJAX_CAT ?? "false";
 const OUTPUT_FILE =
   process.env.SCRAPE_NEWS_OUTPUT ??
   path.resolve(process.cwd(), "data/news.json");
-const MAX_ARTICLES = Number(process.env.SCRAPE_NEWS_MAX_ARTICLES ?? "40");
+const MAX_ARTICLES = Number(process.env.SCRAPE_NEWS_MAX_ARTICLES ?? "200");
 const CONCURRENCY = 4;
 
 function toAbsoluteUrl(raw, base) {
@@ -93,12 +92,44 @@ function extractJsonLdDate($) {
       }
     }
   }
+
+  // Fallback: <meta property="article:published_time"> / og:updated_time
+  const metaPublished =
+    $('meta[property="article:published_time"]').attr("content") ||
+    $('meta[name="publish-date"]').attr("content") ||
+    $('meta[name="date"]').attr("content");
+  const metaModified =
+    $('meta[property="article:modified_time"]').attr("content") ||
+    $('meta[property="og:updated_time"]').attr("content");
+
+  if (metaPublished)
+    return { published: metaPublished, modified: metaModified ?? null };
+
+  // Fallback: first <time datetime="..."> in the article
+  const timeEl = $("time[datetime]").first();
+  if (timeEl.length) {
+    return { published: timeEl.attr("datetime"), modified: null };
+  }
+
   return { published: null, modified: null };
 }
 
-const NOISE_SELECTORS = "header, footer, nav, aside, form, script, style, .menu, .navigation, .sidebar, .widget, .breadcrumb, .wp-block-navigation";
+const NOISE_SELECTORS =
+  "header, footer, nav, aside, form, script, style, .menu, .navigation, .sidebar, .widget, .breadcrumb, .wp-block-navigation, .social-share, .card-cta";
 
 function pickContentContainer($article) {
+  // WhisperPower detail pages: article.main contains fc-content sections
+  const wpMain = $article("article.main").first();
+  if (wpMain.length > 0) {
+    wpMain.find(NOISE_SELECTORS).remove();
+    // Only keep the primary content column, not the aside column
+    const contentCell = wpMain
+      .find(".cell.large-13, .cell.large-offset-2.large-13")
+      .first();
+    if (contentCell.length > 0) return contentCell;
+    return wpMain;
+  }
+
   const candidates = [
     $article("article .entry-content").first(),
     $article("main article").first(),
@@ -147,11 +178,11 @@ async function fetchText(url) {
   return await response.text();
 }
 
-async function fetchAjaxCardsHtml(offset) {
+async function fetchAjaxCardsHtml(offset, nonce) {
   const body = new URLSearchParams({
     action: AJAX_ACTION,
     offset: String(offset),
-    security: AJAX_SECURITY,
+    security: nonce,
     cat: AJAX_CATEGORY,
   });
 
@@ -204,27 +235,48 @@ function extractCardsFromHtml(html, baseUrl) {
     .filter(Boolean);
 }
 
+function extractLoadMoreMeta(html) {
+  const $ = cheerio.load(html);
+  const btn = $("#loadmore");
+  return {
+    // data-nonce is a session token rendered into the button on each page load
+    nonce: btn.attr("data-nonce") ?? AJAX_SECURITY,
+    serverTotal: Number(btn.attr("data-total") ?? "0"),
+    // data-offset is where AJAX pagination starts (after the initial server render)
+    initialOffset: Number(btn.attr("data-offset") ?? String(PAGE_SIZE)),
+  };
+}
+
+function collectUniqueCards(cards, seen, all) {
+  for (const item of cards) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    all.push(item);
+    if (all.length >= MAX_ARTICLES) break;
+  }
+}
+
 async function fetchSeedArticlesViaAjax() {
+  const listHtml = await fetchText(LIST_URL);
+  const { nonce, serverTotal, initialOffset } = extractLoadMoreMeta(listHtml);
+
   const all = [];
   const seen = new Set();
 
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const offset = page * PAGE_SIZE;
-    const html = await fetchAjaxCardsHtml(offset);
+  collectUniqueCards(extractCardsFromHtml(listHtml, LIST_URL), seen, all);
+
+  let offset = initialOffset;
+  while (
+    all.length < MAX_ARTICLES &&
+    (serverTotal === 0 || offset < serverTotal)
+  ) {
+    const html = await fetchAjaxCardsHtml(offset, nonce);
     const pageCards = extractCardsFromHtml(html, LIST_URL);
 
     if (pageCards.length === 0) break;
+    collectUniqueCards(pageCards, seen, all);
 
-    let addedThisPage = 0;
-    for (const item of pageCards) {
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      all.push(item);
-      addedThisPage += 1;
-      if (all.length >= MAX_ARTICLES) return all;
-    }
-
-    if (addedThisPage === 0) break;
+    offset += PAGE_SIZE;
   }
 
   return all;
@@ -249,88 +301,108 @@ async function mapWithConcurrency(items, worker, concurrency) {
   return results;
 }
 
-async function scrape() {
-  let seedArticles = [];
+async function loadExistingArticles() {
+  try {
+    const raw = await fs.readFile(OUTPUT_FILE, "utf8");
+    const data = JSON.parse(raw);
+    const list = Array.isArray(data?.articles) ? data.articles : [];
+    return new Map(list.map((a) => [a.slug, a]));
+  } catch {
+    return new Map();
+  }
+}
 
+async function scrapeArticle(seed) {
+  const articleHtml = await fetchText(seed.href);
+  const $article = cheerio.load(articleHtml);
+
+  const ogTitle = $article('meta[property="og:title"]').attr("content") || "";
+  const ogDescription =
+    $article('meta[property="og:description"]').attr("content") ||
+    $article('meta[name="description"]').attr("content") ||
+    "";
+  const ogImage =
+    $article('meta[property="og:image"]').attr("content") || seed.imageUrl;
+
+  const { published, modified } = extractJsonLdDate($article);
+  const contentContainer = pickContentContainer($article);
+  const contentMarkdown = htmlToMarkdown(contentContainer);
+
+  const gallery = [];
+  (contentContainer ?? $article("body")).find("img").each((_, img) => {
+    if (gallery.length >= 8) return;
+    const $img = $article(img);
+    const url = normalizeImageSource($img, seed.href);
+    if (
+      !url ||
+      /\/res\/flags\//.test(url) ||
+      /-\d+x\d+\.\w+$/.test(url) ||
+      /\/themes\//.test(url)
+    )
+      return;
+    gallery.push({
+      url,
+      alt: ($img.attr("alt") || seed.title || "Article image").trim(),
+    });
+  });
+
+  const excerpt = (ogDescription || seed.title).trim();
+
+  return {
+    id: seed.id,
+    slug: seed.slug,
+    title: (ogTitle || seed.title).trim(),
+    subtitle: "",
+    excerpt,
+    publishedAt: toIsoDate(published),
+    updatedAt: modified ? toIsoDate(modified) : undefined,
+    category: seed.category,
+    tags: [seed.category.toLowerCase()],
+    bannerImage: { url: ogImage, alt: seed.title },
+    gallery,
+    contentMarkdown:
+      contentMarkdown.length > 0
+        ? contentMarkdown
+        : `${excerpt}\n\n[Read full article](${seed.href})`,
+    cta: { label: "Read Original", url: seed.href },
+  };
+}
+
+async function scrape() {
+  console.log("Starting WhisperPower news scrape...");
+
+  const existing = await loadExistingArticles();
+  console.log(`Cache: ${existing.size} existing article(s) loaded`);
+
+  let seedArticles = [];
   try {
     seedArticles = await fetchSeedArticlesViaAjax();
   } catch (error) {
     console.warn(
-      `Ajax scraping failed, falling back to list page parsing: ${String(error)}`,
+      `AJAX scraping failed, falling back to list page: ${String(error)}`,
     );
-
     const listHtml = await fetchText(LIST_URL);
     seedArticles = extractCardsFromHtml(listHtml, LIST_URL).slice(
       0,
       MAX_ARTICLES,
     );
   }
+  console.log(`Website: found ${seedArticles.length} article(s)`);
 
-  const detailed = await mapWithConcurrency(
-    seedArticles,
-    async (seed) => {
+  const newSeeds = seedArticles.filter((s) => !existing.has(s.slug));
+  const cachedCount = seedArticles.length - newSeeds.length;
+  console.log(`New: ${newSeeds.length} | Cached (skipped): ${cachedCount}`);
+
+  const freshlyScraped = await mapWithConcurrency(
+    newSeeds,
+    async (seed, i) => {
+      console.log(`  [${i + 1}/${newSeeds.length}] Scraping "${seed.title}"`);
       try {
-        const articleHtml = await fetchText(seed.href);
-        const $article = cheerio.load(articleHtml);
-
-        const ogTitle =
-          $article('meta[property="og:title"]').attr("content") || "";
-        const ogDescription =
-          $article('meta[property="og:description"]').attr("content") ||
-          $article('meta[name="description"]').attr("content") ||
-          "";
-        const ogImage =
-          $article('meta[property="og:image"]').attr("content") ||
-          seed.imageUrl;
-
-        const { published, modified } = extractJsonLdDate($article);
-
-        const contentContainer = pickContentContainer($article);
-
-        const contentMarkdown = htmlToMarkdown(contentContainer);
-
-        const gallery = [];
-        (contentContainer ?? $article("body")).find("img").each((_, img) => {
-          if (gallery.length >= 8) return;
-          const $img = $article(img);
-          const url = normalizeImageSource($img, seed.href);
-          if (!url) return;
-          if (/\/res\/flags\//.test(url)) return;
-          if (/-\d+x\d+\.\w+$/.test(url)) return;
-          if (/\/themes\//.test(url)) return;
-          gallery.push({
-            url,
-            alt: ($img.attr("alt") || seed.title || "Article image").trim(),
-          });
-        });
-
-        const excerpt = (ogDescription || seed.title).trim();
-
-        return {
-          id: seed.id,
-          slug: seed.slug,
-          title: (ogTitle || seed.title).trim(),
-          subtitle: "",
-          excerpt,
-          publishedAt: toIsoDate(published),
-          updatedAt: modified ? toIsoDate(modified) : undefined,
-          category: seed.category,
-          tags: [seed.category.toLowerCase()],
-          bannerImage: {
-            url: ogImage,
-            alt: seed.title,
-          },
-          gallery,
-          contentMarkdown:
-            contentMarkdown.length > 0
-              ? contentMarkdown
-              : `${excerpt}\n\n[Read full article](${seed.href})`,
-          cta: {
-            label: "Read Original",
-            url: seed.href,
-          },
-        };
+        return await scrapeArticle(seed);
       } catch (error) {
+        console.warn(
+          `  [${i + 1}/${newSeeds.length}] Failed "${seed.slug}": ${String(error)}`,
+        );
         return {
           id: seed.id,
           slug: seed.slug,
@@ -340,45 +412,66 @@ async function scrape() {
           publishedAt: new Date().toISOString(),
           category: seed.category,
           tags: [seed.category.toLowerCase()],
-          bannerImage: {
-            url: seed.imageUrl,
-            alt: seed.title,
-          },
+          bannerImage: { url: seed.imageUrl, alt: seed.title },
           gallery: [],
           contentMarkdown: `Could not scrape full content.\n\n[Read original](${seed.href})`,
-          cta: {
-            label: "Read Original",
-            url: seed.href,
-          },
-          scrapeError: String(error),
+          cta: { label: "Read Original", url: seed.href },
         };
       }
     },
     CONCURRENCY,
   );
 
-  const normalized = detailed
-    .map((article) => {
-      const { scrapeError, ...clean } = article;
-      return clean;
-    })
-    .sort(
-      (a, b) =>
-        new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
-    );
+  // Merge: preserve website fetch order (newest-first); prefer fresh over cached
+  const freshMap = new Map(freshlyScraped.map((a) => [a.slug, a]));
+  const merged = seedArticles
+    .map((seed) => freshMap.get(seed.slug) ?? existing.get(seed.slug))
+    .filter(Boolean);
 
-  const payload = {
-    articles: normalized,
-  };
+  // Sort by date when articles differ by >1 day; otherwise keep website order
+  const normalized = merged
+    .map((article, fetchIndex) => ({ ...article, _fetchIndex: fetchIndex }))
+    .sort((a, b) => {
+      const dateA = new Date(a.publishedAt).getTime();
+      const dateB = new Date(b.publishedAt).getTime();
+      if (Math.abs(dateA - dateB) > 24 * 60 * 60 * 1000) return dateB - dateA;
+      return a._fetchIndex - b._fetchIndex;
+    })
+    .map(({ _fetchIndex, ...article }) => article);
+
+  const newSlugs = newSeeds.map((s) => s.slug);
+  if (newSlugs.length > 0) {
+    const lines = newSlugs.map((s) => `  + ${s}`).join("\n");
+    console.log(`\nNew articles added:\n${lines}`);
+  } else {
+    console.log("\nNo new articles found — nothing to add");
+  }
 
   await fs.mkdir(path.dirname(OUTPUT_FILE), { recursive: true });
   await fs.writeFile(
     OUTPUT_FILE,
-    `${JSON.stringify(payload, null, 2)}\n`,
+    `${JSON.stringify({ articles: normalized }, null, 2)}\n`,
     "utf8",
   );
+  console.log(`Written ${normalized.length} article(s) to ${OUTPUT_FILE}`);
 
-  console.log(`Scraped ${normalized.length} articles to ${OUTPUT_FILE}`);
+  const metaPath = OUTPUT_FILE.replace(/\.json$/, "-meta.json");
+  await fs.writeFile(
+    metaPath,
+    `${JSON.stringify(
+      {
+        scrapedAt: new Date().toISOString(),
+        totalArticles: normalized.length,
+        newArticles: newSlugs.length,
+        newSlugs,
+        latestSlug: normalized[0]?.slug ?? null,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  console.log(`Metadata written to ${metaPath}`);
 }
 
 try {

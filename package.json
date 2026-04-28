@@ -10,8 +10,7 @@
     "scrape": "node scripts/scrape-news.mjs",
     "validate": "node scripts/validate-news.mjs",
     "format": "prettier --write data/news.json",
-    "build:content": "yarn scrape && yarn validate && yarn format",
-    "ci": "yarn build:content"
+    "build:content": "yarn scrape && yarn validate && yarn format"
   },
   "dependencies": {
     "cheerio": "^1.1.2"
